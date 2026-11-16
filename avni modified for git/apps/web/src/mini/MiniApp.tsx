@@ -75,7 +75,7 @@ function Ttt() {
 
 function Groups() {
   return <GroupDashboard />;
-  );
+  
 }
 
 function Profile() {
