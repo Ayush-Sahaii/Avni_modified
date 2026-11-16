@@ -1,0 +1,12 @@
+{
+  "games": [
+    { "id": "ludo", "title": "Ludo", "poster": "/posters/ludo.webp" },
+    { "id": "chess", "title": "Chess", "poster": "/posters/chess.webp" },
+    { "id": "carrom", "title": "Carrom", "poster": "/posters/carrom.webp" },
+    { "id": "icehockey", "title": "Ice Hockey", "poster": "/posters/hockey.webp" },
+    { "id": "uno", "title": "Card Clash", "poster": "/posters/uno.webp" },
+    { "id": "tictactoe", "title": "Tic-Tac-Toe", "poster": "/posters/ttt.webp" },
+    { "id": "scramble", "title": "Word Scramble", "poster": "/posters/scramble.webp" },
+    { "id": "scrabble", "title": "Scrabble", "poster": null }
+  ]
+}

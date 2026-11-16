@@ -1,0 +1,511 @@
+================================================================================
+MASTER DEVELOPMENT PROMPT — "AVNI" PLATFORM REBUILD FROM SCRATCH
+Telegram Bot + Website + Telegram Mini App + Multiplayer Games
+Version 1.0 — copy-paste-ready for an autonomous AI coding agent
+================================================================================
+
+YOU ARE: a senior full-stack engineer, game-systems engineer, UI/UX engineer, QA engineer and DevOps engineer working autonomously.
+
+YOU WILL BUILD: a completely NEW project from scratch. You will not receive the old source code. Everything you need functionally is in this document. Where this document says UNVERIFIED, you must verify against real Telegram behaviour during testing and report what you found.
+
+--------------------------------------------------------------------------------
+0. START-UP GATE — READ THIS FIRST (MANDATORY)
+--------------------------------------------------------------------------------
+0.1 Do NOT start implementation until the owner supplies Section 18 ("USER-PROVIDED EXTRA FEATURES"). Until then you may ONLY do the following, in this order:
+  a) Read this whole document.
+  b) Check which owner inputs are present: personality TXT file, game poster images, extra-features list (Section 20 lists them).
+  c) Produce: (i) a written implementation plan, (ii) Architecture Decision Records (ADRs) for any deviation from Section 8, (iii) a list of questions from Section 20 that are still open, (iv) a risk list.
+  d) STOP and wait.
+0.2 When the extra features arrive: integrate them as described in Section 18, update the plan, then begin Milestone 1 of Section 19.
+0.3 If the personality TXT is missing when you reach Milestone 6 (AI module), build everything else, mark the AI module BLOCKED with evidence, and do not invent a personality.
+0.4 Never invent features, rules or copy that the owner did not specify. When something is unspecified, implement the minimum standard behaviour, document the assumption in /docs/ASSUMPTIONS.md, and list it in your reports.
+
+--------------------------------------------------------------------------------
+1. NON-NEGOTIABLE RULES
+--------------------------------------------------------------------------------
+R1  INDEPENDENCE: You must design and write all code, schema, UI, copy and assets yourself. You do not have the old project. If you ever see old source code, do not use it.
+R2  NO VISUAL COPYING: The old product had a dark glass UI with violet/cyan/gold accents and an emoji-based games hub. You must NOT reproduce that look, layout, colours, wording or components. Also do not copy Chess.com, Carrom King, UNO (Mattel), or any other commercial product's assets, logos, names of themes, card art or exact designs. Those are QUALITY references only.
+R3  PERSONALITY ISOLATION: The AI character comes ONLY from the owner's personality TXT file (Section 9). Do not write any personality, backstory, names, catchphrases or sample replies in application code. The old bot's character is deliberately discarded.
+R4  NO FAKE VERIFICATION: Never claim a test passed unless you ran it and saw it pass. Never hide failing tests. Never delete a feature to make a test pass. Never mark production-ready while a Critical or High issue is open.
+R5  NO SILENT FAILURES: Every caught error is logged with context or surfaced to the user. Empty `catch` blocks are forbidden.
+R6  SECRETS: No secret in the repository, logs, client bundle, error messages or screenshots.
+R7  TELEGRAM TRUTHFULNESS: Never fabricate data that Telegram does not provide. When a field is unavailable, show "unavailable" and the reason.
+R8  LATEST REQUIREMENT WINS: If two instructions conflict, the more specific and more recent owner statement wins. Section 21 lists conflicts already resolved.
+R9  ENGLISH: All bot command replies, system messages, UI text and game messages are in clear English. Only the AI chat persona language comes from the personality file.
+
+--------------------------------------------------------------------------------
+2. PROJECT OVERVIEW
+--------------------------------------------------------------------------------
+2.1 Products
+  - Telegram bot (group management, moderation, fun/economy, AI chat, inline whispers, in-chat games).
+  - Telegram Mini App (authenticated app opened from the bot: games, profile, leaderboards, group management dashboard, help).
+  - Public website (marketing + documentation + add-to-group + legal), same visual identity.
+  - Backend (Telegram webhook, REST API, WebSocket game server, scheduler).
+2.2 Users
+  - Members (play games, chat, profile), group admins (moderation, settings), bot Developers ("Devs": operators with "!" commands and notifications), anonymous visitors (website).
+2.3 What the previous version did (context only, functional): group moderation with locks and warns; welcome/goodbye with buttons; filters; anti-flood; family tree; coin/XP economy with kill/rob; UNO, chess, tic-tac-toe, word scramble and truth-or-dare; inline whispers; Groq-powered chat persona; a Mini App with group dashboard. It stored everything in one generic key-value table, polled for game state, and several features were broken (Section 5).
+2.4 What is new: premium monochrome glassmorphism UI; commercial-quality real-time games (Chess, Carrom, Ice Hockey, UNO, Ludo, Scrabble, Tic-Tac-Toe); seat-based game rooms; synchronized countdown; selectable AI bots; promotion lock; per-category approvals; configurable punishments; force-subscribe; developer notifications on group add; externalised personality; poster assets.
+
+--------------------------------------------------------------------------------
+3. CONTENTS (maps to the 22 required prompt items)
+--------------------------------------------------------------------------------
+ 1 Project overview ........................ Section 2
+ 2 Complete functional requirements ......... Sections 4, 6, 7
+ 3 All commands and aliases ................. Section 4 (Command Registry) and 6
+ 4 Detailed feature specs ................... Sections 4, 6, 7, 10
+ 5 Correct expected behaviour ............... Sections 4, 6, 7 (each ends with ACCEPTANCE)
+ 6 Bugs and required corrections ........... Section 5
+ 7 Database requirements .................... Section 12
+ 8 Backend architecture ..................... Section 8, 13
+ 9 Frontend architecture .................... Section 8, 10
+10 Website requirements ..................... Section 11
+11 Mini App requirements .................... Section 10
+12 External personality file ................ Section 9
+13 API and integrations ..................... Section 14
+14 Security ................................. Section 15
+15 Deployment ............................... Section 16
+16 Testing .................................. Section 17
+17 Error handling ........................... Section 13.4
+18 Performance .............................. Section 13.5
+19 Logging and monitoring ................... Section 13.6
+20 Future extra-feature placeholder ......... Section 18
+21 Implementation roadmap ................... Section 19
+22 Acceptance criteria ...................... At the end of each feature and Section 22
+
+--------------------------------------------------------------------------------
+4. TELEGRAM BOT — FUNCTIONAL SPECIFICATION
+--------------------------------------------------------------------------------
+
+4.0 Platform rules
+ - Webhook mode with secret token (reject requests lacking the exact secret with 403). Register the webhook at startup; request `allowed_updates` that include message, edited_message, callback_query, inline_query, chosen_inline_result, my_chat_member, chat_member, chat_join_request if used.
+ - Command prefixes: "/" for everyone (permission checked per command); "!" for Devs only (non-Devs are ignored silently); "." is accepted as an alias prefix only for the commands that had it: .help and .del. Commands accept the "@BotUsername" suffix. In groups with several bots, ignore commands addressed to another bot.
+ - ONE command registry: each command declares name, aliases, scope (private/group/both), required permission (everyone, group admin with specific right, Dev), required bot rights, argument grammar, help text. "/" and "!" variants must come from the same registry so behaviour cannot drift. /help and the Mini App guide are generated from the registry (every command appears there).
+ - Target resolution for moderation/economy/family commands: reply target first, then text mention, then numeric user ID, then @username if the user is known to the bot. If none: reply with the exact usage line.
+ - Permission failures reply with a precise sentence naming the missing right (for example "I need the Delete Messages admin right to do this.") for both the user's and the bot's missing rights.
+ - Admin status is checked live (cache <= 15 s, invalidated on chat_member updates). Anonymous admins (GroupAnonymousBot) are treated as admins. Messages sent on behalf of a channel (sender_chat) follow the explicit policy in 4.2.7.
+ - Group Devs always pass permission checks except where Telegram itself forbids the action.
+
+4.1 Command Registry (names and aliases to implement)
+ Basics: start; help (.help, !help); id; reset; admin; webapp (miniapp, dashboard, panel, manage) = open Mini App button.
+ Moderation: kick; ban [reason]; unban; mute [duration]; unmute; warn; warns; unwarn; clearwarns; dmute; dban; dwarn; del (.del); pin; promote; promote1; demote; lock; unlock; locks (list state); approve; unapprove; approved (list); chatoff; chaton; chat (on|off); rules; setrules; clearrules; filter; filters; stop; stopall; welcome; setwelcome; resetwelcome; goodbye; setgoodbye; resetgoodbye; open; close.
+ Fun/economy: kiss; hug; slap; punch; crush; couple; truth; dare; coins (balance, bal, points); give; level (lvl, rank, xp); top (richest, leaderboard); kill; revive; protect; rob.
+ Family: family; husband; wife; boyfriend (bf); girlfriend (gf); father (dad); mother (mom); son; daughter; brother (bro); sister (sis); friend; bestie; enemy; divorce (breakup, clearrelation, removefamily); setrelation (Dev god-mode).
+ Games: games; uno; chess; tictactoe (ttt); scramble (wordguess); truthdare; plus launchers for ludo, carrom, icehockey, scrabble that open the Mini App game picker for that game (new).
+ Custom message tools: makebutton; cpost; cmsg; cdel; mycustom; custom.
+ Dev "!" commands: adddev/removedev (aliases addowner/removeowner); devlist (ownerlist); devhelp (ownerhelp); clink (community, communitylink, setcommunity, setclink, setlink); maintenance on|off; feedback [on|off|clear]; gcast; ucast; groups (mygroups); users (myusers); stats; setkiss; sethug; setslap; setpunch; setcrush; setcouple; setaction; clearaction (delaction); UNO sticker catalogue tools (only if sticker UNO is kept, Section 20); Dev versions of all moderation, promote, relation and economy commands; !givecoins; plus new: !reloadpersonality, !notifytest, !lockstatus (see 4.3 / 4.5 / 9).
+ Where the old project used a command name not listed, ignore it.
+
+4.2 LOCKS, APPROVALS AND PUNISHMENTS (new behaviour — highest priority)
+4.2.1 Lock categories (canonical names and aliases)
+  all (everything); text (texts); link (links, url, urls); sticker (stickers); photo (photos, pic, pics, image, images); video (videos); file (files, document, documents, doc, docs); gif (gifs, animation); voice (voices, voicemessage, vm); media (photos + videos + files + gifs); biolink (bio, biolinks, bio_link); promotion (promo, promotions, botpromo, botlink, botlinks, antipromo, botads, ads).
+  Commands: /lock <category> [action] ; /unlock <category> ; /locks shows every category with ON/OFF and its action. /lock with no argument prints the usage with all categories.
+  Each category is independent. /unlock <category> changes ONLY that category. Unlocking "media" does not unlock photo/video/file/gif individually unless the admin names them; /unlock all turns every category off.
+  Locks apply to normal members only. Exempt: Devs, group admins/owner (including anonymous admins), and members approved FOR THAT CATEGORY.
+4.2.2 Detection rules (must be implemented exactly)
+  - text: message has text content that is not a bot command addressed to this bot.
+  - link: any `url` entity, any `text_link` entity (hidden hyperlink), any `text_mention` ignored, plain URLs with scheme, t.me/telegram.me/telegram.dog links, `www.` links, bare domains with a known TLD (policy list is configurable, default: common TLDs), links in captions, links in forwarded messages, inline keyboard URL buttons on user-sent via_bot messages. Mentions (@username) alone are NOT links.
+  - photo, video (incl. video notes), file (documents that are not animations, plus audio), gif (animations), sticker, voice (voice messages).
+  - media: photo OR video OR file OR gif.
+  - biolink: sender's Telegram bio contains a link (checked with getChat; cached with TTL; re-evaluated on every message so removal of the link restores speech).
+  - promotion: see 4.2.4.
+  - Edited messages are evaluated with the same rules as new messages (edited_message updates).
+4.2.3 Punishments (configurable per lock category, default = DELETE)
+  - Actions: delete | mute | kick | ban. Default is ALWAYS delete. Enabling a lock without choosing an action must NEVER kick or ban.
+  - Admin chooses the action with `/lock <category> [delete|mute <duration>|kick|ban]` and in the Mini App (per category).
+  - mute: duration 1 minute to 365 days (default 1 hour when mute is chosen without duration; a value below 30 seconds or above 366 days would be treated as "forever" by Telegram, so enforce the range). Kick = ban then immediate unban (the user may rejoin). Ban = permanent until unbanned.
+  - delete always happens first, in every action mode. Mute/kick/ban are applied after delete, once per violation burst (use a 10-second de-duplication window to avoid repeating the action for a rapid series of messages).
+  - Bot-rights check at configuration time and at enforcement time: delete needs can_delete_messages; mute/kick/ban need can_restrict_members. If a right is missing, the bot posts one actionable notice (rate-limited) and falls back to whatever it can still do (delete-only), never to a harsher action.
+  - Never punish: group admins/owner, Devs, the bot itself, approved users for that category, Telegram service accounts (777000), anonymous admin identity.
+  - Every enforcement writes an audit-log row (who, category, action, message id, result/error).
+4.2.4 Promotion lock (/lock promotion, /lock promo, legacy aliases)
+  Purpose: remove promotional links posted by OTHER BOTS, whether or not those bots are administrators, without touching human members' messages and without changing existing human link-lock behaviour.
+  - Identify a bot sender via `from.is_bot` (sender is a bot other than this bot). For messages sent by a human via an inline bot (`via_bot` set), the HUMAN's own link/lock rules apply (do not treat the human as a bot); the promotion lock additionally removes a via_bot message only if the via_bot is another bot AND the message contains a promotional link or URL button. Make this a documented admin setting `promotion_scope` = bots_only (default) | bots_and_via_bot.
+  - "Promotional link" = a `url` or `text_link` entity, a scheme/`www.`/t.me/telegram.me/telegram.dog URL in text or caption, or an inline-keyboard button with `url` or `web_app` URL. NOT promotional: user mentions (tg://user?id=...), text_mention, plain @username mentions, this bot's own messages.
+  - Allow-list: admins can allow specific bots (by @username/ID) or domains to be exempt from the promotion lock (/lock promotion allow @bot, /lock promotion deny @bot).
+  - Works for bot admins and non-admin bots equally.
+  - TELEGRAM LIMITATION (verified against core.telegram.org/api/bots/bot-to-bot on 2026-11-16): a bot is not sent other bots' group messages unless (a) the message is a command mention addressed to it or a direct reply to its message, or (b) BOTH conditions hold: Bot-to-Bot Communication Mode is enabled in @BotFather for a participating bot AND this bot is an administrator in the group AND Group Privacy Mode is disabled for this bot. At least one of the two bots must have the mode enabled. Therefore:
+      * Implement a Readiness Check (Section 4.2.9) that tells admins exactly which prerequisite is missing for the promotion lock.
+      * Document the BotFather steps in /docs/SETUP.md and in the Mini App (Locks tab) as a help sheet.
+      * Re-verify this limitation during testing with two real test bots and a real test group; report results. Do not claim the lock works until you have observed a bot-sent promotional message being deleted.
+      * Add loop protection for bot-to-bot traffic: ignore this bot's own messages, de-duplicate, rate-limit per bot per chat, never reply to other bots' messages.
+  - Must not interfere with the human `link` lock: the two locks are evaluated independently; a human link is handled by `link`, a bot link by `promotion`.
+  ACCEPTANCE: (1) With prerequisites met, a test bot posting "https://example.com" or a message with a URL button is deleted within 2 seconds; (2) the same text from a human is untouched when only `promotion` is on; (3) with `link` on and `promotion` off, a human link is deleted and a test bot's link is not; (4) a user mention posted by a test bot is not deleted; (5) readiness check reports missing prerequisites correctly in each combination.
+4.2.5 Approvals (replaces the old "approve = exempt from everything")
+  - `/approve <target> [category ...]` approves the target ONLY for the named categories. Allowed approval categories: text, voice, file, photo, video, sticker, gif. Aliases follow 4.2.1 (voices, vm, files, photos, videos, stickers, gifs, texts). With no category the bot shows an inline keyboard (toggle buttons for the 7 categories) and applies the choice; it must never silently approve everything.
+  - `/approve <target> all` is NOT supported. The bot answers that approval is per category and lists the seven allowed categories.
+  - Categories outside the seven (link, biolink, promotion, media, all, flood, force-subscribe) can never be approved by /approve; they remain locked for the target. (media is a group of four approvable categories; "approve media" is rejected with a hint to approve photo/video/file/gif.)
+  - `/unapprove <target> [category ...]` removes the named approvals; with no category it removes all approvals of that user.
+  - `/approved` lists approved users and their categories. The Mini App edits approvals too.
+  - `/unlock <category>` acts independently of approvals.
+  - Help text and Mini App copy clearly explain: "Approval lets a member bypass the listed lock categories only."
+  ACCEPTANCE: approving user U for photo and sticker lets U send photos/stickers while text lock, link lock, voice lock remain enforced against U; /unlock voice unlocks voice for everyone without altering approvals; /approve U all is refused with the correct message.
+4.2.6 Lock commands output
+  Replies are short, in English, mention the category, the action and the effect. Example format: "Photo lock is ON. Action: delete message." (Do not copy this wording verbatim if you can write clearer wording; keep it unambiguous.)
+4.2.7 Special senders
+  - Anonymous admins: exempt. Linked-channel automatic forwards (sender_chat is the linked channel, from user 777000): exempt by default; admins may toggle `locks_apply_to_channel_senders`. Other sender_chat posts (a user posting as a channel): treated as a non-admin member subject to locks; punish by deleting (mute/kick/ban of a channel identity uses banChatSenderChat).
+4.2.8 Anti-flood, warns (preserve, improve)
+  - Anti-flood: window N seconds (default 5), max messages (3-20, default 5), action delete|mute|kick|ban (default delete; mute duration configurable, default 5 minutes). Applies to non-admin, non-Dev members. Config via /antiflood and Mini App.
+  - Warns: /warn increments; reaching warn_limit (0-15; 0 = never act) triggers warn_action mute|kick|ban (default mute 1 hour); /unwarn, /clearwarns, /warns. Warn counts are persistent per chat+user.
+4.2.9 Readiness Check (new)
+  `/readiness` (admins) and Mini App panel show a checklist for the current group: bot is admin; can_delete_messages; can_restrict_members; can_invite_users; can_pin; privacy mode state; whether chat_member updates are flowing (observed within the last 24 h); Bot-to-Bot mode state if detectable (otherwise "cannot be detected; verify in BotFather"); force-subscribe channel access. Each failing item has a fix hint.
+ ACCEPTANCE for 4.2 overall: automated tests with a Telegram API mock for every category x action x exempt/not-exempt combination (matrix test), plus a manual test script executed on a real test group and recorded in the test report.
+
+4.3 FORCE SUBSCRIPTION / CHANNEL VERIFICATION (new)
+ Purpose: admins require members to be in a configured channel before they can talk in the group.
+ Configuration (per group; Mini App + commands /forcesub on|off, /setforcesub <@channel|-100id|invite link>, /forcesubaction <delete|mute <duration>|kick|ban>, /forcesubstatus):
+  - required channel (public @username or private numeric ID plus invite link shown to users), enabled flag, action (default DELETE), mute duration (default 1 hour when action is mute), exempt list (admins and Devs always exempt; admins may add exempt users), announcement mode (silent | short notice with Join and "I have joined" buttons, notice auto-deleted after 15 s, rate-limited to one per user per 60 s).
+  - At configuration time verify: channel exists; the bot is a member/administrator of the channel (Telegram only lets a bot read member lists of a channel when it is an administrator there); the bot can call getChatMember on the channel. If verification fails, do NOT enable enforcement; tell the admin exactly what to fix.
+ Membership verification:
+  - Use getChatMember(channel_id, user_id). A user counts as subscribed if status is member, administrator, creator, or restricted with is_member = true. left, kicked, restricted with is_member = false = not subscribed.
+  - Cache positive results for up to 10 minutes and negative results for up to 20 seconds; invalidate on chat_member updates from the channel (if the bot receives them) and when the user presses "I have joined".
+  - Rate-limit and queue Telegram calls to respect Telegram flood limits; coalesce parallel checks for the same user.
+  - Telegram-API-failure policy (documented, default FAIL-OPEN): if Telegram returns an error that is not "user not found/left" (timeouts, 5xx, 429, bot removed from channel, channel made private), never punish the user; notify group admins once (rate-limited) that verification is failing; auto-pause enforcement after 5 consecutive failures within 10 minutes and tell admins. Admins may switch to fail-closed in the Mini App (delete only, never mute/kick/ban on API failure).
+  - Users who never started the bot are verified without DM (getChatMember works without DM).
+ Enforcement:
+  - Applies to every message type from non-exempt members (text, media, stickers, voice, etc.), to edited messages, and to join events if the admin selects "check on join".
+  - Actions follow 4.2.3 semantics: delete always first; mute/kick/ban only if the admin selected them; defaults to delete.
+  - After a user presses "I have joined" and verification succeeds, remove any force-subscribe mute applied by this feature (restore previous permissions) and clear the notice.
+  - Audit-log every enforcement; per-group counters visible in the Mini App.
+ ACCEPTANCE: test matrix (not subscribed/subscribed/left/restricted-member/restricted-non-member x delete/mute/kick/ban x API ok/API failing); proof that default config deletes only; proof that a failing Telegram API causes zero punishments; proof that exempt users are untouched; real-group test with a real private and a real public channel, recorded.
+
+4.4 WELCOME, GOODBYE, RULES, FILTERS, BUTTONS, REPORTS (preserve, fix)
+ - Welcome/goodbye: enabled flags, text up to 3,500 chars with placeholders {mention} {id} {chatname} {username} (and safe HTML escaping of user-controlled values), up to 8 rows x 4 buttons, button types url | webapp (https only) | popup/alert | reply_text | callback, keyboard mode inline|reply, per-group persistence in the database. Trigger on `chat_member` updates AND on `new_chat_members`/`left_chat_member` service messages with de-duplication so each join produces exactly one welcome even if both sources fire. No goodbye after a ban. Optional auto-delete timer. Works when the bot is not admin (service-message path) and explains in the Mini App which events it can see.
+ - Rules: /rules, /setrules, /clearrules, 4,000 chars; button "Rules" in welcome supported.
+ - Filters: keyword -> saved message (text, sticker, photo, video, animation, document, audio, voice, video_note, with captions); exact case-insensitive match by default; optional "contains" and "starts with" modes; admin-only creation; /filters, /stop, /stopall; max filter count per group configurable (default 200).
+ - Custom button posts (makebutton/cpost/cmsg/cdel/mycustom): builder flow in DM and Mini App, templates per user (limits configurable: default 20 templates, 8 buttons per message, 4 per row), callback buttons with popups.
+ - @admin report: a member writes "@admin" (or uses /report) replying to a message; bot notifies admins with context and buttons (resolve, delete message, warn, mute, ban); cooldown per reporter (default 10 minutes in the old project, configurable).
+ - /chatoff and /chaton: AI chat off/on per group; commands and moderation keep working.
+ ACCEPTANCE: unit tests for placeholder rendering and HTML escaping; integration tests for double-event de-duplication; one real-group welcome test with bot admin and one without admin.
+
+4.5 DEVELOPER NOTIFICATIONS ON GROUP ADD (new)
+ Trigger: `my_chat_member` update in a group or supergroup where the bot's status changes from left/kicked to member/administrator/restricted. Also handle: group migrated to supergroup (do not notify twice; link the new chat ID to the old one), bot re-added after removal (notify again, tagged "re-added"), and bot promoted to admin later (send a short "permissions changed" notice, rate-limited).
+ Recipients: every Dev in the Dev table (seeded from DEV_IDS env on first start). Send as DM. If a Dev never started the bot (Forbidden) or blocked it, record the failure, retry later when that Dev interacts, and notify the other Devs.
+ Content (include only what Telegram legitimately returns; label unavailable fields as "unavailable (reason)"):
+  - Group name; group ID; type (group/supergroup/forum); public username if any; description (from getChat, may be empty); member count (getChatMemberCount); slow mode / forum flag if provided by getChat.
+  - Invite link: use `invite_link` returned by getChat if present. If absent and the bot has can_invite_users, CREATE a new secondary link with createChatInviteLink (name it "Dev notification"). Do NOT call exportChatInviteLink because it revokes the group's existing primary link. If it cannot be created, show "unavailable (bot lacks Invite Users right)".
+  - Adding user: ID, first/last name, username if any, language code if present in the update, mention link; or "unavailable" when the update has no actor (for example added by an anonymous admin).
+  - Bot status and rights: member/administrator and each admin right (can_delete_messages, can_restrict_members, can_invite_users, can_pin_messages, can_manage_topics, can_promote_members, can_manage_chat, etc.), as given by the update's new_chat_member.
+  - Timestamp (UTC), update ID, and a button row: "Open group" (invite link if available), "Open Mini App group dashboard", "Leave group" (Dev confirmation required).
+ Persist every notification (group ID, time, actor, delivery result per Dev) in `dev_notifications`. De-duplicate within 5 minutes per group+actor. Provide `!notifytest` to send a sample to the calling Dev, and `!groups` for the live group list with the same metadata.
+ ACCEPTANCE: simulate my_chat_member updates for each status transition (including missing actor, missing username, missing invite right, Dev blocked bot) and assert message content, no fabricated values and no crash; real test: add the bot to a new test group, receive the DM within 5 seconds.
+
+4.6 ECONOMY, XP, PROFILE, KILL SYSTEM (preserve the documented rules)
+ - Wallet in coins per user ID; Devs have infinite coins (displayed as infinity), can /give any amount without losing coins, cannot be robbed but can be killed and revive for free; the bot (Avni) is the sink for rob fines and can never be killed or robbed. All balance changes go through a ledger (immutable rows) inside DB transactions; balances can never become negative; concurrent operations are safe.
+ - XP: level n requires 50 * n * (n - 1) total XP. Win XP 50, kill XP 25, rob XP 20 (constants configurable).
+ - /kill: killer gets 100 coins; victim is dead in every group for 24 hours; dead users cannot be killed again, cannot kill, protect or rob; the system tells them to /revive. /revive costs 200 (payer is the person who ran the command; Devs free); auto-revive at 24 h (persisted deadline, survives restarts). /protect costs 200, 24 h immunity from kill/rob, not available to dead users. /rob AMOUNT: max 5,000, takes what the victim has if less, cannot target protected/dead users, 20% chance of being caught: fine 10% of the attempted amount (if the robber has less, all) paid to the bot, plus 3-minute rob jail (blocks only rob). /open and /close toggle the kill system per group (admins and Devs). Messages in clear English.
+ - Profile: coins, XP, level, rank, status (alive/dead/protected), game stats per game, achievements, 30-day trend (wins, coins, XP, games), optional custom title unlocked at configurable level (default 3).
+ - Leaderboards: coins, XP, competitive wins, per game. Pagination and caching with 30-second TTL.
+ ACCEPTANCE: property/concurrency tests on the ledger (no negative balances under 100 parallel operations), unit tests for each rule above, restart test for deadlines.
+
+4.7 FUN AND FAMILY
+ - /kiss /hug /slap /punch with Dev-configurable media (sticker/GIF/animation) per action; /crush and /couple choose a random known member of the group (members are tracked as they speak/join; cap and TTL configurable); /truth /dare from content lists stored in the database (seed lists written by you in English; the owner can extend via Dev command).
+ - Family tree: relations husband/wife/boyfriend/girlfriend (partner slot: one), father, mother (one each), son, daughter, brother, sister (multiple), friend, bestie, enemy. Proposals require acceptance by the target through inline buttons (expiry 24 h), except enemy (instant). Unique constraints enforce slot limits. /family shows the tree for self, replied or mentioned user (also in Mini App). /divorce etc. remove relations. Dev god-mode can set relations without acceptance.
+ ACCEPTANCE: tests for slot limits, acceptance/expiry flow, concurrent proposals.
+
+4.8 INLINE WHISPERS
+ - `@Bot whisper <@username|ID> <message>` creates a lock card in the chat; only sender and recipient can open it; one-time read; message deleted from storage after read or TTL (default 24 h, configurable); content never appears in the group. Username matching works only while the recipient ID is unknown and the whisper is unread; afterwards only the numeric ID can open it. Message max 2,000 chars, HTML-escaped. Requires BotFather inline mode and inline feedback 100% (document in SETUP.md). Readers get a popup via callback answer; sender can see read status.
+ ACCEPTANCE: access-control tests (sender, recipient, third party, wrong username after ID bind), expiry cleanup test.
+
+4.9 DEVELOPER OPERATIONS
+ - !maintenance on|off (API answers 503 with a maintenance message; health unaffected; Mini App shows banner). !feedback on|off|clear and viewing (feedback off by default; 3 per user per day; 3-1,000 chars; categories bug, idea, other). !gcast / !ucast broadcast to groups/users with preview, confirm button, throttling (<= 25 messages/second global, honour retry_after), per-recipient result log and a final summary. !groups, !users, !stats show live data (not stale caches). !clink sets the community link shown on the Mini App About page. Dev add/remove with audit log; Devs listed via env seed + database.
+ ACCEPTANCE: broadcast test against a mocked Telegram API with 429 responses; Dev-only enforcement tests.
+
+================================================================================
+5. KNOWN DEFECTS OF THE PREVIOUS PRODUCT — YOU MUST NOT REPEAT ANY OF THEM
+================================================================================
+Each line: defect -> what the new build must do. Every item needs an automated regression test unless marked MANUAL.
+ D01 Promotion guard never executed because two guards shared one handler group -> use a single ordered guard pipeline; test that every guard fires; log which guards ran per update in debug mode.
+ D02 Other bots' messages are not delivered by default -> Readiness Check + BotFather setup docs + real two-bot test (MANUAL evidence).
+ D03 /approve exempted users from every lock -> per-category approvals (4.2.5).
+ D04 Locks ignored edited messages -> evaluate edited_message.
+ D05 Link lock missed hidden hyperlinks, URL buttons, bare domains -> entity-aware detection (4.2.2).
+ D06 No GIF category -> gif category.
+ D07 Punishment hard-wired -> configurable action, default delete (4.2.3).
+ D08 Welcome depended only on chat_member updates -> dual-source with de-duplication (4.4).
+ D09 Whole match stored as one JSON blob in a generic key-value table, mutated under a global blocking lock, clients polling every 2 s -> relational match model, WebSocket push, no blocking locks (Sections 6, 12).
+ D10 Write-behind to a second database could silently lose data; ephemeral local disk -> single transactional system of record (Postgres), no local-disk state.
+ D11 Blocking database calls in async code; many settings reads per message -> async pooled DB; per-chat settings cached as one object with explicit invalidation.
+ D12 Sequential update processing and slow AI calls stalling everything -> concurrent handlers, per-chat ordering, strict timeouts.
+ D13 Single-instance, in-memory timers/caches; free-tier sleeping -> persisted deadlines, always-on service, documented limits.
+ D14 Generic refusal replaced valid model answers; predefined responses relied on the LLM -> Trigger Layer + provider-metadata-based refusal handling (Section 9).
+ D15 Personality hard-coded and merged with an optional file -> external file only (Section 9).
+ D16 Canned reply lists (sexual/slang/gaali/error) hard-coded in code -> only from personality file; platform errors neutral.
+ D17 Duplicated "!" and "/" command code that drifted -> one registry.
+ D18 Documentation claimed tests/CI/.env.example that were not shipped; version strings disagreed -> ship tests, CI, .env.example; single version source.
+ D19 Health check always 200 -> separate liveness and readiness endpoints with real checks.
+ D20 Monolithic 14.5k-line file -> modular codebase, max ~400 lines per file guideline, lint-enforced.
+ D21 Anonymous-admin / channel-sender ambiguity -> explicit policy (4.2.7).
+ D22 Rate limits collided with polling -> push transport; per-action limits.
+ D23 Anti-flood and mute lengths hard-coded -> configurable.
+ D24 Mini App timers drifting from phone clocks -> server-authoritative deadlines with server time offset sync (Section 6.4).
+ D25 Mini App multiplayer move rejected because a version field was missing (found only by testing) -> contract tests between client and server using shared schema types.
+
+================================================================================
+6. GAME PLATFORM (shared by every game)
+================================================================================
+6.1 Principles
+ - Server-authoritative: clients send intents (move, roll, shot, input), the server validates against the rules engine and broadcasts state. Clients never decide outcomes.
+ - Each game has a pure, deterministic rules engine in `packages/shared/games/<game>` with exhaustive unit tests; the server runs it; the client may run it for prediction/validation of UX only.
+ - Real-time transport: WebSocket (JSON or MessagePack; choose by ADR and benchmark). Messages carry `roomId`, monotonically increasing `seq`, and a `serverTime`. Reconnect with resume token; the server replays missed events or sends a full snapshot. HTTP REST remains for non-real-time operations.
+ - Persisted state: rooms, players, moves/events and results live in Postgres (Section 12). Active-room hot state may live in memory but every turn boundary and every deadline is persisted so a restart restores the room and its timers.
+6.2 Room lifecycle and seating
+ - States: lobby -> countdown -> playing -> (paused for disconnect) -> finished | cancelled | expired.
+ - Create: host picks game, options (6.5), visibility (invite-only default). Invite via deep link `https://t.me/<bot>?startapp=<token>` and via in-chat share button; token is random 128-bit, single room, expires with the room. Joining from the Mini App opens the lobby directly.
+ - Seats are dynamic: the room shows exactly the seats allowed by the game and chosen player count (Chess 2, Tic-Tac-Toe 2, Ice Hockey 2, UNO 2-4 plus bot seats, Ludo 2-4, Carrom 2 or 4 (singles/doubles), Scrabble 2-4). Seat layout is drawn around the central board/table (UNO and Ludo: players around the table; Chess/Hockey: opponent at top, you at bottom; Carrom: players on the board edges). A seat shows avatar (Telegram photo if available, otherwise generated monogram), name, status chip (host, ready, connected, disconnected, bot).
+ - Host controls: choose options, add/remove bots, kick a player (before start), set ready state rules (all humans ready), start. Guests: ready/unready, leave. Host leaving a lobby cancels or transfers host (transfer to the longest-waiting human; cancel if none) — specify chosen behaviour in UI copy.
+ - A user may be in at most one active room per game type (and at most 2 rooms overall, configurable); trying otherwise offers "return to your game".
+6.3 3-2-1 synchronized countdown
+ - When the host starts (or all ready), the server sets `countdownStartsAt = serverNow + 500 ms` and `playStartsAt = countdownStartsAt + 3000 ms` and broadcasts both. Clients render 3, 2, 1, GO from the server clock offset (6.4) so every player sees the same number within +/- 100 ms. No input is accepted before `playStartsAt` (server rejects with a clear reason; hockey/carrom controls remain visibly locked).
+ - If any human disconnects during the countdown, the countdown pauses up to 10 s, then aborts back to lobby with the reason.
+ - ACCEPTANCE: automated test with 4 simulated clients with different clock skews (+/- 5 s) and latencies (30-250 ms) shows the visible "GO" within 100 ms of each other (measured by server-time stamps); manual test on two real phones recorded.
+6.4 Clock and timers
+ - On connect the client runs 5 ping/pong samples to estimate `offset` and RTT (take the median of the lowest-RTT samples), refreshes every 30 s, and renders ALL countdowns from `serverNow = Date.now() + offset`.
+ - Game timer (match clock, chess clocks, per-turn timers) are server deadlines (`deadlineAt`). The UI only displays; drift must never decide a result. Display precision: seconds for turn timers, tenths when under 10 s for chess.
+ - Accurate countdown requirement: displayed remaining time within +/- 250 ms of the server's value at all times under normal network conditions; test with throttled CPU.
+6.5 Options per game (only these; do not add others)
+ - All games: player count/seat count, bots (where supported, 6.6), turn timer preset (Off, 15 s, 30 s, 45 s, 60 s where the game has turns), "private" invite code.
+ - Chess: time control presets (Untimed, 3+0, 5+0, 10+0, 15+10, 30+0), colour (random/white/black), vs AI level (6.6), takebacks off by default.
+ - Tic-Tac-Toe: first mover (random/host), best-of 1/3/5.
+ - UNO: players 2-4, bots 0-3 (total seats <= 4), turn timer (default 45 s), rule set fixed as in 7.4.
+ - Ludo: players 2-4 (humans + bots), turn timer (default 30 s), three-sixes rule on/off (default on).
+ - Carrom: singles (2) or doubles (4), board/bot options, shot timer (default 45 s).
+ - Ice Hockey: score target (3/5/7) or timed (2 or 3 minutes), default first to 5 plus a 3-minute cap with sudden death.
+ - Scrabble: players 2-4, turn timer (Off, 1, 2, 3 minutes per turn), challenge mode (on/off, default on).
+6.6 AI bots
+ - Selectable for UNO, Ludo and Carrom: the host chooses how many bots (any number such that humans + bots fit the seat limit; examples: UNO 1-3, Ludo 1-3, Carrom 1 in singles or up to 3 in doubles) and a difficulty (Easy, Normal, Hard). Several bots may play in the same room. Bots have names/avatars from a neutral list written by you (not personas from the personality file), are labelled "BOT", move after a human-like delay (500-1,500 ms, configurable), never see hidden information they should not know (UNO hands, Scrabble racks), and obey the same rules engine.
+ - Chess keeps AI levels (Beginner, Casual, Club, Strong, Expert) using a real engine (for example Stockfish compiled to WASM/Node or a native binary) with documented skill/depth mapping; document that levels are approximate. Tic-Tac-Toe vs AI: Easy (random with blocks), Normal, Hard (perfect play). Ice Hockey and Scrabble bots are NOT required (do not build unless the owner asks; see Section 20).
+ - Bot-only or bot-heavy matches: coin rewards obey the anti-farm caps in 6.8.
+6.7 Common controls
+ - Leave: before start = leave seat; during play = confirm dialog "Leaving forfeits your seat"; for 3+ player games the remaining players continue (a bot may take over the seat if the host enabled "bot replaces leavers"; default on for UNO and Ludo).
+ - Resign (2-player games and Carrom doubles team captain): confirm dialog, immediate loss for the resigner.
+ - Disconnect handling: grace period 60 s (30 s in hockey); turn timers keep running; if the grace expires the player forfeits (2-player) or is replaced/skipped per game rules. On reconnect the client receives a full snapshot and resumes.
+ - Pause: not offered, except automatic pause during countdown disconnects.
+ - Draw offer and rematch: chess (draw offer), all 2-player games (rematch request with acceptance).
+ - In-room quick reactions (emoji set of 6) rate-limited; no free-text chat (reduces moderation burden) unless the owner requests it.
+6.8 Results, rewards, stats
+ - On finish the server writes the result (winner(s), placements, reason), updates stats, pays rewards, and posts a result card into the origin Telegram chat when the room was started from a chat (as the old product did).
+ - Rewards: win = 100 coins + 50 XP (constants configurable). Matches that include bots: coin reward only for matches with at least one other human OR subject to a daily cap of 300 coins from bot matches and a 45-second cooldown between paid bot matches; XP from bot matches off by default. Rewards are written through the ledger idempotently (one reward per match per player).
+ - Stats: played/wins/losses/draws per game, streaks, competitive wins (matches with >= 2 humans), 30-day daily snapshot for trends, achievements (design a list of at least 12 achievements across games; document in /docs/ACHIEVEMENTS.md).
+6.9 Anti-cheat and integrity
+ - Hidden information is never sent to clients that must not see it (UNO hands of others, Scrabble racks of others, draw pile order).
+ - Rate-limit intents per socket; validate all numeric ranges (shot power, positions, striker coordinates) against the board geometry; clamp and reject impossible values; per-room sequence numbers prevent replay.
+ - Hockey/Carrom physics outcomes are computed on the server (6.x game sections).
+6.10 Mini App game UI wrapper (common to all games)
+ - Full-screen game stage with: top bar (back/leave, room name, match timer), seat HUDs, central board, bottom action area, toast area, reconnect banner, countdown overlay.
+ - Prevent accidental closing during live games: call the Mini App API to disable vertical swipes and enable the closing confirmation while a match is live (verify the exact method names in the current Telegram Mini App docs at implementation time) and re-enable on exit. Use fullscreen where supported and appropriate.
+ - Sound and haptics: optional, off-by-default for sound, on-by-default for light haptics; toggle in settings; all sounds are royalty-free assets that you create or properly license and list in /docs/CREDITS.md.
+ ACCEPTANCE for 6: protocol conformance tests (client/server schema), reconnect/resume tests, deadline-survives-restart test (kill the server mid-match, restart, match resumes with correct remaining time), countdown test (6.3), property tests for seating/host transfer, load test (Section 17.6).
+
+================================================================================
+7. GAME SPECIFICATIONS
+================================================================================
+General quality bar for every game (commercial-quality, not demos): clear onboarding (30-second "how to play" sheet from Section 7.10 data), responsive layout from 320 px to tablets, 60 fps animations, consistent motion language, accessible touch targets >= 44 px, colour-blind-safe cues (not colour alone), reduced-motion variant, instant feedback to every tap (<100 ms), polished win/lose/draw end screens, graceful offline/reconnect states.
+
+7.1 CHESS
+ Reference quality: premium wooden board experience comparable in polish to Chess.com's wooden themes. Do not copy Chess.com assets, piece sets or exact board art; commission-quality original board and piece art (SVG) of your own design: realistic wood grain textures (procedural or original raster, optimised <= 200 KB per texture, WebP), subtle bevels, soft shadows, light/dark squares in warm wood tones, rank/file coordinates on the frame, last-move and check highlights, legal-move dots, capture rings, smooth piece movement (150-250 ms ease), drag-and-drop and tap-tap input, premove optional (off), promotion picker, captured pieces and material difference, move list with figurine notation, flip board, optional piece/board theme switch (at least 2 wood themes).
+ Rules: full FIDE rules via a vetted library (for example chess.js) executed on the server: castling, en passant, promotion, check/checkmate, stalemate, insufficient material, threefold repetition, fifty-move rule, draw by agreement. Clocks per 6.5 with increment support, flag fall detection by server.
+ Modes: vs friend (room) and vs AI (5 levels). Resign, draw offer/accept/decline, rematch with colour swap.
+ In-chat chess (inline buttons, 8x8 button board with timers) is retained as a lightweight mode with: board rendering via message edits, move input by tapping from/to squares, auto-flip per side, per-move timers (default 60 s), 100 coins to the winner. (If this lightweight mode is judged too costly, see Section 20 decision D3.)
+ ACCEPTANCE: perft tests to depth >= 4 on standard positions, a suite of >= 40 rule-edge positions (castling through check, en passant pins, promotion, stalemate traps), clock tests (increment, flag fall, reconnect), visual regression screenshots of the board at 360x800 and 412x915, manual checklist for wood board quality.
+
+7.2 CARROM
+ Reference quality: polished mobile carrom comparable in feel to Carrom King. Do not copy its assets.
+ Board and pieces: top-down wooden carrom board with frame, four corner pockets, baselines, circles, centre circle, 9 white + 9 black coins and 1 red queen, striker; realistic wood, subtle lacquer sheen, soft shadows, coin edges; premium look consistent with the app's identity.
+ Rules (standard, documented in the in-app guide): players take turns shooting the striker from their baseline; pocketing own colour keeps the turn; pocketing the opponent's colour gives the coin to the opponent's score and ends the turn (house rule documented); queen must be "covered" (pocket the queen then pocket one of your own coins in the same turn or the queen returns to centre); striker pocketed = foul, return one of your pocketed coins to the board (or owe one); scoring: 1 point per remaining opponent coin when a player clears their colour, queen 3 points when covered (state exact scoring in the guide); game to 25 points or board cleared. Singles (2) and doubles (4, teams opposite). Bots (1-3) per 6.6.
+ Controls: drag the striker along the baseline to position (server validates range), pull back/drag to aim with a visible aim guide and power meter, release to shoot; ghost aim line optional; flick gestures must be smooth at 60 fps. Shot timer per 6.5.
+ Physics design (recommended; deviate only by ADR): shot-resolution model. The server runs a deterministic fixed-timestep 2D rigid-body simulation (for example planck.js/Box2D port or a custom circle-circle solver with friction and restitution tuned for carrom) from the validated shot input, runs it faster than real time, and returns (a) the trajectory keyframes at 60 Hz for every moving body and (b) discrete events (collisions with sounds/haptics, pockets, fouls). Clients play back the trajectory smoothly with interpolation. Striker placement and aiming are streamed to the other players at <= 20 Hz as lightweight cursors. This keeps results identical for all players.
+ ACCEPTANCE: deterministic simulation test (same input -> same trajectory), pocket/foul/queen-cover rule tests, bot plays 100 simulated full games without rule violations or deadlocks, 60 fps playback on a 4x CPU-throttled mid-range profile, visual regression of board, real-device manual test.
+
+7.3 ICE HOCKEY (air-hockey style on an ice rink)
+ Reference quality: polished, responsive mobile ice-hockey game. Do not copy another product's art.
+ Visuals: premium rink (ice texture, rink lines, goal creases, boards), puck and strikers (mallets) with soft shadows, ice-scratch trails, spark particles on hits, goal celebration, scoreboard, countdown overlay (6.3). Monochrome identity: ice and graphite palette, restrained accent only for team side indication (two neutral-but-distinguishable tones, with shape cues).
+ Gameplay: 2 players, each controls a striker restricted to their half; the puck bounces off boards with realistic restitution and friction; goals scored in the opponent's goal; first to the configured score or highest score at time limit; sudden death tie-break; match timer visible; pause is not allowed.
+ CONTROL REQUIREMENTS (critical): the player's striker must follow the finger immediately and smoothly with NO noticeable input delay or lag.
+  - Own striker is rendered from LOCAL pointer input every animation frame, never waiting for the network. Target: pointer-to-pixel latency <= 1 display frame (<= 16.7 ms at 60 Hz) under normal load.
+  - Use Pointer Events (or Touch Events with passive:false), `touch-action: none`, `getCoalescedEvents()` when available, `requestAnimationFrame` loop, a single canvas/WebGL (for example PixiJS or raw canvas) with no DOM mutation in the loop, pre-allocated objects (zero allocations per frame in the hot path), no React state updates per frame, offscreen layers cached, devicePixelRatio capped at 2.
+  - Striker follows the finger with direct 1:1 mapping (finger position = striker position, clamped to the player's half), with a tiny critically-damped smoothing only if it measurably removes jitter without adding perceived lag (default OFF; any smoothing must be justified in a test with measured added latency <= 4 ms). The finger touch point offset must be configurable (default: striker centred on the finger with a small upward offset so the finger does not hide it; document).
+  - Network: send input at 60 Hz (coalesced) as absolute normalized positions with client timestamps and sequence numbers; server simulation at 60 Hz fixed step; snapshots to clients at 30 Hz (puck, opponent striker, score, events). Client-side prediction for the own striker (instant) and for the puck during local contact; interpolation buffer 60-100 ms for the opponent striker; smooth reconciliation for the puck without visible snapping (correction over <= 100 ms); lag compensation for hit detection documented.
+  - Bypass the Telegram vertical-swipe-to-close gesture and system gestures during play (see 6.10). Ignore multi-touch beyond the first controlling touch; handle touchcancel.
+  - Performance budget: sustain 60 fps on a mid-range Android phone profile (4x CPU throttle in Chrome DevTools remote debugging as a proxy) with p95 frame time <= 16.7 ms and zero dropped input events in a 3-minute match; battery-friendly (no work when tab hidden; pause rendering on visibilitychange).
+ Latency test harness (mandatory deliverable): a headless client simulating RTT 30/80/150 ms with 2% packet loss and jitter; assert that own-striker local response is unaffected, puck correction magnitude and frequency stay within thresholds you define and document, and desync never exceeds 1 puck radius for more than 200 ms.
+ ACCEPTANCE: automated physics tests (wall bounces, goal detection, no tunnelling at max puck speed), input-latency measurement test (synthetic pointer events -> next frame position equals pointer position), perf test thresholds above, two-phone real-device test recorded on video, reconnect test mid-point.
+
+7.4 UNO (complete multiplayer room)
+ Reference quality: a proper central table game. Original card art of your own design (do not copy Mattel's card faces, fonts or logos; use clear generic numerals/symbols, four suit colours with additional symbols for colour-blind users).
+ Table UI: central circular/oval table with draw pile, discard pile, current colour indicator, direction indicator; 2-4 seats around the table with avatar, name, card count, turn indicator ring, timer ring, "UNO!" badge; your hand as a fan at the bottom (scrolls/snaps when > 12 cards; cards never overlap more than 60%); playable cards raised and others dimmed; tapping a playable card plays it immediately (no confirmation); drag-to-play optional; colour picker sheet after a wild; challenge prompt for +4; Draw / Pass / Call UNO / Catch controls; animated card movement between hand, piles and seats; turn banner; accessible labels.
+ Rules (house rules exactly as documented by the previous product): 108-card deck; match by colour or value; Wild any time; Wild +4 is legally played only when you hold no card of the current colour, but may be bluffed; the next player may challenge: caught bluff -> bluffer draws 4; wrong challenge -> challenger draws 6; Draw Two makes the next player draw 2 and lose the turn, NO stacking; Reverse acts like Skip with 2 players; no playable card -> draw one, play it if it fits, else the turn ends (Pass); play your second-last card with UNO called, otherwise anyone may catch you before the next player acts (+2 cards); first finisher is overall winner, remaining players continue until one remains, placements recorded; 45-second turn timer (configurable); a timeout draws a card and passes; 3 consecutive timeouts = forfeit (seat replaced by a bot if enabled). Dealing 7 cards each; start card cannot be Wild +4 (reshuffle) and special start cards apply standard effects (document).
+ Bots: 0-3 per 6.6; difficulty affects colour choice, bluff frequency and challenge decisions.
+ In-chat sticker UNO (inline mode, 2-10 players, 119-sticker catalogue managed by Devs) is a separate legacy mode: keep only if the owner confirms (Section 20 decision D2). If kept: playable and dimmed card duplicates, "Select Your Card" and "Select Your Color" inline buttons, tapping a dim card posts a generic "that card cannot be played now" notice without naming the card, UNO game state in memory only and erased 5 minutes after the last move, only the sticker catalogue is persisted.
+ ACCEPTANCE: rules-engine tests covering every card, deck reshuffle, bluff/challenge outcomes, no-stacking, reverse with 2 players, UNO catch window, multi-finisher placements; 1,000 randomized bot-vs-bot games without engine exceptions; hidden-information test (client payload never contains others' hands); timer/forfeit tests; visual regression of the table with 2, 3, 4 seats and hands of 1, 7, 15, 25 cards.
+
+7.5 LUDO
+ Rules (default classic ruleset, documented in the guide): 2-4 players, 4 tokens each, board with 4 home yards, 52-square loop, 6-square home columns per colour and a centre home; safe squares (star/start squares) where tokens cannot be captured; a token leaves the yard only on a roll of 6; rolling a 6 grants an extra roll; three consecutive 6s forfeit the turn (option); landing on a single opponent token on a non-safe square sends it back to its yard; tokens of the same colour may stack and form a block only if the owner enabled blocks (default off); exact roll required to enter the centre home; first player to bring all four tokens home wins; remaining players continue for placements. Server-side dice using a cryptographically secure RNG; roll animation is cosmetic and starts after the server result is known. Turn timer: on timeout the server auto-rolls and auto-moves (bot logic Easy) for that turn; three consecutive timeouts mark the player AFK and replace by bot if enabled.
+ UI: premium board drawn with SVG/canvas in the app's identity (player colours may be used within the board for token distinction, with shape/number markers as well); smooth token hop animations along the path; clear highlighting of movable tokens; central table feel with seats around the board; dice with physical-looking roll; capture animation.
+ Bots: 0-3 (Easy random legal move; Normal capture/escape/advance heuristics; Hard lookahead on risk).
+ ACCEPTANCE: rules-engine tests (entry on 6, extra turn, capture, safe squares, exact home entry, three-sixes), 1,000 randomized bot games complete without deadlock, dice distribution chi-square test, board geometry test (every path index maps to unique coordinates), visual tests.
+
+7.6 SCRABBLE (poster-implied game; owner gave no rules — standard rules apply)
+ Standard English Scrabble: 15x15 board with premium squares, 100 tiles with standard distribution and values (document the table), racks of 7, first move through centre star, words in one row/column connected to existing tiles, cross-word validation, bingo bonus 50, exchange tiles (not allowed when bag < 7), pass, resign, end-game scoring (rack penalties, going out bonus), dictionary challenge option, turn timer option. 2-4 players. Dictionary: owner decision D4 (licence-clean word list required; do not embed a proprietary list). Hidden racks never leave the server except to the owner of that rack.
+ UI: premium wooden/graphite board consistent with the identity, drag-and-drop tiles with snap, rack shuffle, tentative-word score preview, invalid placement hints, move history.
+ ACCEPTANCE: rules tests for cross-words, premium squares (letter/word multipliers applied only to newly placed tiles), bingo, exchange, end-game scoring; dictionary lookup tests; hidden-information tests; visual tests.
+
+7.7 TIC-TAC-TOE
+ 3x3, vs friend or vs AI (Easy/Normal/Hard), first mover option, best-of series, win/draw detection, premium minimal board in the identity, win-line animation, 30-second move timer (configurable), rematch. In chat: inline-button mode retained (X/O choice, 30 s move timer, 100 coins to winner).
+ ACCEPTANCE: exhaustive state-space test (all legal games), Hard AI never loses in 10,000 simulations.
+
+7.8 WORD SCRAMBLE
+ 60-second word-unscramble. In chat: first correct guess wins and earns 100 coins; in Mini App: single player against the clock with the same reward rules and anti-farm caps. Word list: you create a licence-clean English list (min 2,000 words, 4-9 letters) stored in the database/seed file; scrambles must differ from the original word; no repeats within a session.
+ ACCEPTANCE: tests for scramble validity, timing, duplicate prevention, reward idempotency.
+
+7.9 TRUTH OR DARE
+ Group lobby: /truthdare opens a join lobby; players join; bot picks turns in order (or randomly, configurable); the chosen player picks Truth or Dare with buttons and receives a prompt from the database lists; skip/next/end controls for the host; 60 s response window.
+ ACCEPTANCE: lobby/turn-order tests; multi-group isolation tests.
+
+7.10 GAME POSTERS AND IMAGE ASSETS (Mini App Games section)
+ Inputs: the owner will supply poster files named by convention: carom.webp, ludo.webp, chess.webp, scrabble.webp, tictactoe.webp, uno.webp, icehockey.webp (there may be more).
+ Mapping (explicit table in code and docs, not guesswork): carom.webp -> game id `carrom` (note the spelling difference is intentional and must be handled), ludo -> `ludo`, chess -> `chess`, scrabble -> `scrabble`, tictactoe -> `tictactoe`, uno -> `uno`, icehockey -> `icehockey`. Unknown extra filenames: log a warning at build time, list them in the build report, do not display them until mapped.
+ Storage: `apps/web/public/assets/games/<filename>`; a build script generates `games.manifest.json` containing for each poster: game id, file name, intrinsic width/height, byte size, blur-up placeholder (tiny base64 LQIP generated at build time), and a hash for cache busting. Serve with long-lived immutable cache headers and ETag.
+ Rendering rules: preserve the poster's aspect ratio and avoid unwanted cropping: the card's media box uses the poster's intrinsic aspect ratio (from the manifest) with `object-fit: contain` inside a rounded glass frame; if the layout requires a uniform card height, the poster is letterboxed on a blurred, darkened copy of itself rather than cropped; critical poster content is never cut. Never upscale beyond intrinsic pixels x device pixel ratio: set `max-width` to the intrinsic CSS pixel size (intrinsic width / devicePixelRatio) and warn at build time when a poster is smaller than 2x the largest displayed size or lower than 720 px on its long side. Use `srcset` with additional derived sizes only if the owner supplies larger masters; otherwise single source. `decoding="async"`, `loading="lazy"` below the fold, `fetchpriority="high"` for the first row, explicit width/height attributes to prevent layout shift, descriptive alt text.
+ Graceful failures: missing file, 404, decode error or corrupt image -> show a generated placeholder card (game icon + name on a glass gradient) and log an event; the game remains playable. The Games section never shows a broken image icon.
+ Verification (automated + manual): (1) a unit test that every game in the registry resolves to a poster path or the placeholder; (2) a build test that fails when a mapped poster file is missing unless `ALLOW_MISSING_POSTERS=1`; (3) a Playwright test that opens the Games section at 3 viewport sizes and asserts each card's image `src` matches its game id and that `naturalWidth` > 0 and rendered size <= intrinsic size; (4) a screenshot comparison; (5) a manual check that tapping each poster opens the correct game.
+ ACCEPTANCE: all of the above pass; clicking each poster opens the right game; deleting a poster file in a test shows the placeholder without console errors.
+
+7.11 REWARDS/STATS WIRING FOR NEW GAMES
+ Chess, TTT, UNO, Ludo, Carrom, Hockey, Scrabble all use Section 6.8. Word Scramble uses its own cap.
+================================================================================
+8. INDEPENDENT ARCHITECTURE (binding unless an ADR justifies a change)
+================================================================================
+8.1 Recommended stack and why
+ - Language: TypeScript end-to-end (strict mode). Reason: one language and shared types/rules engines between server and client; first-class WebSockets; strong ecosystem for Telegram bots, canvas/WebGL and testing.
+ - Monorepo (pnpm workspaces + Turborepo or Nx):
+     apps/server       Fastify (HTTP + WebSocket), grammY Telegram bot (webhook), game-room service, scheduler
+     apps/web          React + Vite + TypeScript: public website AND Telegram Mini App (two route trees, one design system)
+     packages/shared   zod schemas for every HTTP/WS message, constants, i18n-free English strings catalogue, game rules engines
+     packages/db       SQL migrations (plain SQL with a migration runner such as node-pg-migrate or Drizzle Kit), typed query layer (Drizzle ORM or Kysely)
+     packages/ui       design tokens and components (see Section 10)
+     tools/            asset pipeline (poster manifest, image optimisation), load-test and latency harnesses
+ - Database: Supabase-hosted PostgreSQL as the ONLY system of record. Use the pooled connection string, SSL required, migrations in the repo, row-level security enabled on all tables with NO anon access (server uses the service connection only; the browser never talks to Supabase directly). No SQLite anywhere in production. Supabase Storage may host user-uploaded Dev media (action stickers/GIF file IDs are stored as Telegram file_ids in the DB; nothing else is required).
+ - Real-time: native WebSocket (ws or @fastify/websocket). No third-party realtime service is required. Redis is OPTIONAL; do not add it until a measured need exists. If horizontal scaling is later required, shard rooms by roomId with sticky routing and use Postgres LISTEN/NOTIFY or Redis pub/sub for cross-node events (document the migration path in an ADR; do not build it now).
+ - Telegram bot library: grammY with webhook adapter, concurrent update handling enabled, per-chat sequential middleware for ordering-sensitive flows, built-in flood-wait handling (auto-retry plugin) and a global outbound throttler.
+ - Rendering: React for application chrome. Game stages: Canvas 2D or PixiJS (WebGL) for Hockey and Carrom; SVG + CSS transforms for Chess, Ludo, UNO and Scrabble boards where crispness matters; Framer Motion (or the Web Animations API) for UI transitions. Physics: planck.js (Box2D) or a custom solver (ADR). Chess rules: chess.js (server) and a Stockfish WASM/native engine for AI. Charts for stats: lightweight (own SVG) rather than heavy libraries.
+ - Quality tooling: ESLint (strict), Prettier, TypeScript project references, Vitest (unit/integration), Playwright (end-to-end + visual regression), k6 or Artillery (load), Lighthouse CI (website/Mini App performance), GitHub Actions CI.
+ - Deviations: you may choose a different stack only through an ADR that states the measured reason and proves equal or better results for real-time latency, type safety and deployability on Render. Do not deviate for preference.
+8.2 Service layout
+ - One Render web service runs: HTTP API, WebSocket gateway, Telegram webhook endpoint, static file serving for apps/web (or a separate Render Static Site behind a CDN; choose by ADR; static assets must carry immutable cache headers).
+ - Internal modules (clean boundaries, no cross-imports except via interfaces): telegram (bot, command registry, guards pipeline), moderation, force-subscribe, economy, social (family, whispers), ai (provider, personality engine), games (room manager, engines, bots, physics), api (HTTP routes), realtime (WS gateway), jobs (scheduler), notifications (developer alerts), admin (Dev tools), infra (config, logging, db, metrics).
+ - Scheduler: persisted jobs in Postgres (for example pg-boss or a table + polling worker with `SELECT ... FOR UPDATE SKIP LOCKED`) for: mute expiries, kill/protect expiries, whisper TTL, lobby/room expiry, game deadlines, daily stats snapshot, cleanup. No timer is allowed to exist only in memory.
+ - Guards pipeline for group messages (single ordered middleware chain, each step unit-tested): dedupe -> track member -> mute enforcement -> force-subscribe -> anti-flood -> locks (all categories incl. promotion/biolink) -> filters -> admin-mention report -> AI/trigger layer. A step can stop the chain; every stop is logged with step name.
+8.3 Data flow
+ Telegram -> HTTPS webhook (secret) -> enqueue (persist update_id for idempotency) -> bot middleware -> modules -> Postgres.
+ Mini App -> HTTPS API (Authorization: tma <initData>) + WebSocket (ticket) -> same modules.
+ Website -> static pages + a small public API (stats, status) with caching.
+ Game rooms: client intent -> WS gateway -> room manager (validates, applies engine) -> persist event -> broadcast snapshot/delta -> bot posts results.
+8.4 Environment variables (names are binding; values never committed)
+ Required: TELEGRAM_BOT_TOKEN; DATABASE_URL (Supabase pooled Postgres URL); PUBLIC_BASE_URL; WEBHOOK_SECRET (random 32+ chars); DEV_IDS (comma-separated Telegram IDs for first-run seeding).
+ AI: AI_API_KEY; AI_BASE_URL (default Groq-compatible); AI_MODELS (ordered list); AI_TIMEOUT_MS; PERSONALITY_FILE; BOT_DISPLAY_NAME.
+ App: MINI_APP_URL; WEBSITE_URL; SENTRY_DSN (optional); LOG_LEVEL; NODE_ENV; PORT; TRUST_PROXY; RATE_LIMIT_* ; GAME_* tuning constants (documented defaults in /docs/CONFIG.md); ALLOW_MISSING_POSTERS (build only).
+ Provide `.env.example` with every variable, comment and safe default, and a startup validator (zod) that exits with a clear message listing every missing/invalid variable.
+8.5 Repository and documentation deliverables
+ README (what it is, quick start), /docs/SETUP.md (BotFather steps: inline mode, inline feedback 100%, privacy mode, Bot-to-Bot Communication Mode, domain/menu button, commands list; Supabase; Render), /docs/ARCHITECTURE.md (diagrams), /docs/ADRs/, /docs/ASSUMPTIONS.md, /docs/PERSONALITY.md, /docs/CONFIG.md, /docs/RUNBOOK.md (deploy, rollback, backup restore, incident steps), /docs/TEST_REPORT.md and /docs/ISSUES.md (live logs of Section 17.8), /docs/CREDITS.md, CHANGELOG.md (Keep a Changelog), CONTRIBUTING.md.
+
+================================================================================
+9. AI CHAT AND THE EXTERNAL PERSONALITY FILE (Personality Engine)
+================================================================================
+9.1 Source of truth
+ - The owner provides ONE text file (for example `personality.txt`). It is the ONLY source of the AI character: identity, tone, language, habits, boundaries, predefined responses and special-case instructions.
+ - Place it at `config/personality/personality.txt` in the GitHub repository. Filename and path are configurable with env `PERSONALITY_FILE` (default as above). The application source must contain NO personality text, NO character name used for behaviour, NO sample replies, NO per-trigger canned strings. (Technical error messages that are not part of the character are allowed and must be neutral and in English.)
+9.2 Loading, validation, reload
+ - Read at startup and cache in memory with SHA-256 checksum and byte size. Validate: file exists, UTF-8, non-empty, size within a configurable ceiling (default 200 KB; warn above 40 KB because it costs tokens on every request), no NUL bytes.
+ - If the file is missing/invalid at startup: the bot and all non-AI features still start; the AI module starts in DISABLED state; AI addressed messages get one neutral English notice ("Chat is temporarily unavailable") rate-limited per chat; an error is logged and shown in the Dev dashboard. Never fall back to an invented persona.
+ - `!reloadpersonality` (Dev only) re-reads the file, validates, atomically swaps it in, logs checksum old -> new, and reports the result. A failed reload keeps the last good version and says so.
+ - Updating through GitHub: the owner edits the file in the repo and pushes; Render autoDeploy redeploys; optionally the Dev runs !reloadpersonality after a deploy that did not restart the process. Document this flow in /docs/PERSONALITY.md. Add a CI check that fails if the file is missing or empty.
+ - Expose the active checksum and load time in /api/version (Dev-only detail) and in `!devhelp`.
+9.3 Prompt assembly
+ - System message = a thin technical wrapper (written by you, persona-free: instructs the model to follow the supplied specification exactly, to prefer explicitly specified responses verbatim, and to keep within the platform's safety limits) + the full personality text verbatim. Do not paraphrase, shorten, translate or "improve" the personality text. If the file is too large for the model context, truncate NOTHING silently: fail validation with a clear error.
+9.4 Predefined-response handling (fixes the old "generic refusal instead of the configured answer" defect)
+ - When you receive the personality file, read it completely and extract every place where it defines a predefined response, canned line, trigger/response pair, special-case instruction, boundary reply, fallback reply, or language rule. Produce /docs/PERSONALITY_RULES_MAP.md listing each with its exact text location (heading/line number) and your interpretation. Ask the owner to confirm the map before building the matcher if any item is ambiguous.
+ - Implement a deterministic Trigger Layer that runs BEFORE any LLM call: detect triggers (normalised text: case-folding, Unicode normalisation, repeated-letter collapsing, punctuation/emoji tolerance, common short-form expansion drawn ONLY from the personality file if it defines them) and, when the file specifies a literal response, return that response as written. When the file specifies a behaviour instead of a literal line, pass an explicit "specification priority" note and the matched rule text to the model, and verify post-generation that the answer follows the rule when the rule is checkable (for example required phrase present).
+ - If the file does not give machine-detectable triggers, do not invent any. Instead keep the file authoritative in the prompt and ask the owner whether they want a sidecar `personality_triggers.json` (derived 1:1 from the file, without altering the personality text) — do not create it without approval.
+ - Refusal handling: NEVER replace a model answer with a generic refusal because it matches a regex. Detect provider-side refusals only through provider metadata (finish reason / safety flags / empty content) or an explicit refusal classifier with tests. When a provider refusal happens: (1) retry once with the specification-priority note; (2) if the file defines a response for that situation, send it; (3) otherwise send the neutral English technical notice. Log the event with category (never log full user text).
+ - Safety layer (platform-level, persona-independent): self-harm/crisis messages receive a supportive neutral response regardless of persona (message text configurable in a platform file separate from the personality file); sexual-explicit and hateful content boundaries follow the personality file where it defines them, with a platform minimum that never generates explicit sexual content.
+ - Language: reply language follows the personality file. Command replies and game messages stay English (R9).
+9.5 Chat behaviour (functional, persona-free)
+ - Groups: reply only when the bot is named (name set in config `BOT_DISPLAY_NAME`), @mentioned, or its message is replied to; never reply to other bots; respect /chatoff. DMs: always reply. Show typing action. Per-chat memory of the last 10 messages (user + assistant), persisted per chat with 7-day TTL; /reset clears it. Multi-user groups prefix speaker names. Keep memory out of logs.
+ - Providers: Groq-compatible chat API behind an `AiProvider` interface with timeouts (default 20 s), retry with backoff, circuit breaker, model fallback list from env (`AI_MODELS`), per-chat concurrency limit of 1, global concurrency cap, and token/max length limits from env. Provider API key only from env.
+ - Management-intent text sent in DM ("change welcome", "lock links") gets a button to the Mini App group dashboard instead of an AI answer.
+ ACCEPTANCE (all automated with a mocked provider): (a) for every trigger in PERSONALITY_RULES_MAP the exact predefined response is returned and the provider is not called when a literal response exists; (b) a mocked provider that returns "I'm sorry, I can't help with that" never reaches the user as a generic refusal; (c) missing/empty/oversized/non-UTF-8 file -> AI disabled, other features alive, correct notice; (d) reload swaps atomically and a bad reload keeps the old version; (e) grep test proves the source tree contains no persona strings from the personality file.
+
+================================================================================
+10. TELEGRAM MINI APP AND DESIGN SYSTEM
+================================================================================
+10.1 Visual identity (applies to Mini App, website and game chrome — ONE system)
+ Direction: exceptionally polished, modern, premium. Premium glassmorphism in black, white, dark grey, light grey and their complementary shades. It must be a COMPLETE REDESIGN: do not reuse the old product's violet/cyan/gold accents, gradients, layouts, component shapes, copy or emoji-icon style.
+ Tokens (define as CSS custom properties generated from a single TypeScript token file; both themes ship):
+  - Neutrals: a 12-step grey scale from near-black (#050505) to near-white (#FAFAFA) tuned so adjacent steps are distinguishable; surfaces: base, raised, overlay; text: primary, secondary, tertiary, disabled; borders: hairline 1 px at 8-14% white (dark) / 6-12% black (light).
+  - Glass: backdrop-filter blur 18-32 px with saturate(120-160%), translucent fills at 6-14% white (dark theme) / 55-75% white (light theme), 1 px inner highlight on the top edge, soft outer shadow, subtle noise texture (<= 2 KB) to avoid banding. Provide a fallback for browsers/WebViews without backdrop-filter (solid translucent fill) and cap simultaneous blurred layers (budget: <= 4 large blurred surfaces on screen) to protect low-end phones; provide a `reduced-effects` mode auto-enabled when the device is slow (see 13.5).
+  - Colour use: UI chrome stays neutral. Semantic states (success, warning, error, info) use restrained, desaturated tones and always pair colour with an icon/label. Game artwork (wood boards, Ludo player colours, UNO suits, ice) may use colour as required by the game but frames, HUDs, buttons and sheets stay in the neutral system.
+  - Themes: Dark (default) and Light, plus Auto following Telegram's colour scheme; the user can override in Settings. Both must look premium; no theme may be an afterthought.
+  - Typography: one variable sans family self-hosted with a documented licence (for example Inter or Geist) plus tabular numerals for timers and scores; type scale of 8 steps; display weights for hero titles; minimum body size 15 px; line-height 1.4-1.6; no text smaller than 12 px.
+  - Spacing/radius/elevation scales on a 4 px grid; radius steps 8/12/16/24/32; consistent icon set (one outline icon family, 1.5 px stroke, 24 px grid; create or license; no emoji as UI icons).
+  - Motion: 120-180 ms micro-interactions, 220-360 ms transitions, easing curves defined as tokens; only transform/opacity animations; shared-element transitions between game poster -> lobby; spring physics for sheets; skeleton loaders for all async content; `prefers-reduced-motion` honoured; all animations 60 fps on mid-range devices.
+  - Buttons: clear hierarchy — Primary (high-contrast filled: white on black theme / black on light), Secondary (glass), Tertiary (text), Destructive (neutral base with confirm step and red text cue), Icon buttons; sizes S/M/L; min touch target 44 px; states: default, hover(desktop), pressed (scale 0.98 + shadow change), focus-visible ring, disabled, loading (inline spinner, width does not jump). Haptic tick on primary actions.
+  - Components (build once, reuse everywhere): app shell, bottom navigation, top bar, glass card, list row, switch, segmented control, stepper, slider, select sheet, modal, bottom sheet, toast, tooltip, tabs, avatar (photo/monogram), chip, badge, progress/countdown ring, skeleton, empty state, error state, form field with validation, confirmation dialog, data table (leaderboard), chart (bar/line, own SVG), code-free "how to play" sheet.
+  - Layout: mobile-first (320-480 px primary), safe-area aware (use Telegram's safe area values and env(safe-area-inset-*)), works in portrait; games may request landscape where it improves play (hockey optional); tablet/desktop layout for the website and Mini App in desktop Telegram (max content width, two-column where useful). No horizontal scrolling except intentional carousels. Visible keyboard-safe inputs (viewport changes).
+  - Accessibility: WCAG AA contrast in both themes, focus order, ARIA roles for dialogs/tabs/live regions, screen-reader labels, keyboard operation on desktop, scalable text up to 200%, not colour-only cues, captions for any audio cues.
+ Design deliverables: a living style guide route (/design, available in dev/staging) rendering every token and component state; Figma not required.
+ ACCEPTANCE: Lighthouse Accessibility >= 95 and Best Practices >= 95 on key screens; visual-regression baselines for every component state; manual review checklist: consistent spacing, no off-token colours (lint rule that fails on raw hex outside token files and game-art files).
+10.2 Telegram integration
+ - Authenticate every API call with the signed initData (HMAC-SHA256 as specified by Telegram), reject stale (> 24 h; recommended <= 1 h for sensitive actions with re-auth) or future-dated (> 5 minutes) data; exchange for a short-lived session token for WebSocket tickets. Use ready(), expand(), theme/viewport/safe-area events, back button, main/secondary button where they improve UX, closing confirmation and swipe control during live games (6.10), haptic feedback, share/startapp links, open link in browser, clipboard where allowed. Detect "opened outside Telegram" and show a polite preview/blocked screen (no fake data in production).
+10.3 Navigation and screens (functional requirements; design them freshly)
+ Bottom navigation: Home, Games, Groups, Profile, More (or an equivalent five-item structure you design). Each feature has its own page.
+ HOME: one beautiful, uncluttered hero page: greeting with avatar, "Continue your game" card if a room is active, three quick actions (Play, Create room, Manage groups) and a compact daily rewards/streak strip. Nothing else.
+ GAMES: poster grid (7.10) -> game detail sheet (rules, modes, player counts) -> Mode selection (vs friend / vs bot / solo) -> options (6.5) -> Lobby -> Game. Also "Join with code" and active/recent matches.
+ LOBBY / ROOM: seats around a preview of the board (6.2), invite button (share link/copy), ready toggles, host controls, bot adder with count and difficulty, options summary, start button, countdown (6.3).
+ PROFILE: avatar, name, level/XP progress, coins, rank, status (alive/dead/protected), per-game stats, 30-day trend chart, achievements, custom title (if unlocked), history, share profile.
+ LEADERBOARD: tabs coins/XP/wins/per game; me-highlight; pagination.
+ FAMILY: tree visualisation for me or another user, pending proposals with accept/decline.
+ FRIENDS/ACTIVITY: recent opponents, invite shortcuts, activity feed of my matches.
+ GROUPS (admin only): list of groups where I am admin AND the bot is present, with state per group: manageable | bot_not_admin | bot_not_member | not_user_admin | unverifiable and the reason; live re-check button; "Add bot to a group" button.
+ GROUP DASHBOARD (tabs):
+   1) LOCKS: every category (4.2.1) as a row with switch + action selector (delete/mute+duration/kick/ban, default delete) + "approved members" entry; promotion lock panel including allow-list and the Bot-to-Bot readiness help sheet; link-lock options; biolink; locks_apply_to_channel_senders; AI chat toggle.
+   2) FORCE SUBSCRIBE: channel picker/validator, enable switch, action selector (default delete), mute duration, fail-open/closed policy, exempt list, status and counters, "test my channel" button.
+   3) MODERATION: warn limit and action, anti-flood (window, limit, action, duration), approvals manager (per category), banned/muted lists with quick unmute/unban, audit log viewer (last 200 events with filters), kill-system switch.
+   4) GREETINGS & RULES: welcome/goodbye editors with live preview, placeholder chips, button builder (types in 4.4), rules editor, auto-delete timer.
+   5) FILTERS: list/search/add/delete filters with preview (media filters can only be created from chat by replying; the dashboard lists/deletes them).
+   6) READINESS: checklist from 4.2.9.
+   Every change is saved through an explicit Save bar with diff summary, optimistic UI with rollback on failure, and server-side validation; actions that can punish members show a short consequence summary ("Members who send photos will have the message deleted").
+ SETTINGS: theme (Auto/Dark/Light), sound, haptics, reduced effects, language note, feedback form (when enabled), share app, About (community link from !clink), version.
+ HELP: generated from the command registry and game guides; searchable; works offline from the last cached copy.
+ DEV DASHBOARD (Devs only, hidden otherwise): personality status (file path, size, checksum, last load, last error, reload button), notification log with delivery results, group list, maintenance toggle, feedback inbox, readiness of integrations (Telegram, DB, AI provider), recent errors.
+ Global UI states: offline banner, maintenance banner, session-expired re-auth flow, update-available prompt, empty states with next actions, error states with retry and a copyable error ID.
+ ACCEPTANCE: Playwright flows for each screen in dark and light themes at 360x800, 390x844, 412x915 and a tablet viewport; no console errors; keyboard navigation test; performance budgets in 13.5.
+
+================================================================================
+11. WEBSITE
+================================================================================
+ Public site in the same design system (Section 10), served from apps/web.
+ Pages: Home (hero, live-style feature highlights, game showcase using the posters per 7.10, "Add to your group" and "Open Mini App" buttons), Features (moderation, games, AI, economy), Games (each game with description, rules summary, screenshots/clips you generate from the real build), Commands (searchable, generated from the command registry; permission badges), Setup guide (BotFather settings and admin rights needed per feature, including the force-subscribe and promotion-lock prerequisites), Status (reads /api/status: uptime, version, incident banner), Privacy Policy and Terms (draft templates clearly marked "needs legal review"; data collected and retention per Section 12.6), Contact/Support link (community link), 404.
+ Requirements: SEO basics (titles, meta, OpenGraph/Twitter cards with generated images, sitemap, robots), semantic HTML, i18n-ready structure (English only now), performance (Lighthouse Performance >= 90 mobile, LCP <= 2.5 s, CLS <= 0.05), accessibility (AA), responsive from 320 px to 1920 px, no third-party trackers; privacy-respecting analytics optional and OFF by default.
+ Pages that link into Telegram use https://t.me/<bot> and startapp deep links.
+ ACCEPTANCE: Lighthouse CI thresholds enforced in CI; broken-link check; visual regression; HTML validation.
+
+================================================================================
+12. DATABASE REQUIREMENTS (independent design — do not mimic any legacy key-value schema)
+================================================================================
+12.1 Principles: normalised relational schema in PostgreSQL; typed columns for anything queried or constrained; JSONB only for genuinely schemaless payloads (for example game event payloads, button layouts) with CHECK constraints or zod validation at the boundary; every table has created_at/updated_at; foreign keys with ON DELETE rules; unique constraints enforce business rules; migrations are forward-only SQL files with a runner executed at deploy; a seed script for content lists; schema documented in /docs with an ER diagram.
+12.2 Suggested tables (names illustrative; you own the final design; every item below must exist in some form)
+ identity: users (telegram_id PK, names, username, language, is_bot_known flag, first_seen, last_seen), chats (chat_id PK, type, title, username, migrated_to, bot_status, bot_rights JSONB, added_by, added_at, left_at), chat_members_seen (chat_id, user_id, last_seen; bounded/TTL), devs (user_id, added_by, added_at).
+ group config: chat_settings (chat_id PK; ai_chat, kill_system, warn_limit, warn_action, warn_action_duration, antiflood_enabled/window/limit/action/duration, promotion_scope, locks_apply_to_channel_senders, welcome/goodbye enabled/text/buttons/kb_mode/auto_delete, rules_text, ...), lock_rules (chat_id, category, enabled, action, mute_seconds; PK chat_id+category), approvals (chat_id, user_id, category; PK all three; category restricted by CHECK to the seven), promotion_allowlist (chat_id, kind bot|domain, value), force_sub_config (chat_id PK, channel_id, channel_username, invite_link, enabled, action, mute_seconds, fail_policy, check_on_join, notice_mode), force_sub_exempt (chat_id, user_id), filters (chat_id, keyword, match_mode, kind, payload, caption), custom_message_templates, promoted_admins (chat_id, admin_id, promoted_by, promoted_at).
+ enforcement: warnings (chat_id, user_id, count), mutes (chat_id, user_id, until, reason, source; indexed for expiry job), audit_log (id, chat_id, actor_id, target_id, action, category, source, message_id, result, error, created_at; partitioned or pruned after 90 days), forcesub_cache (optional; or in-memory with TTL).
+ economy and social: wallets (user_id PK, balance CHECK >= 0 except infinite flag for Devs), ledger (id, user_id, delta, reason, ref, idempotency_key UNIQUE, created_at), xp (user_id, xp), kill_state (user_id, dead_until, protected_until, rob_jail_until), family_relations (user_id, relation, relative_id; partial unique indexes for single slots), family_proposals (id, from, to, relation, expires_at, status), whispers (id, sender_id, recipient_id, recipient_username, chat_id, content_encrypted, status, expires_at), action_media (action, kind, file_id), content_lists (kind truth|dare|word, text, active), profiles (user_id, custom_title, ...), achievements (user_id, code, earned_at).
+ games: game_rooms (id, game, host_id, status, options JSONB, invite_token UNIQUE, origin_chat_id, origin_message_id, created_at, started_at, finished_at, version), room_players (room_id, seat, user_id NULLABLE, is_bot, bot_level, status, joined_at; UNIQUE room+seat), room_events (room_id, seq, type, payload JSONB, created_at; UNIQUE room+seq; append-only), room_snapshots (room_id, seq, state JSONB; periodic), game_results (room_id, placements JSONB, reason), game_stats (user_id, game, played, wins, losses, draws, streak, best_streak), daily_stats (user_id, day, wins, coins, xp, games), deadlines (id, kind, ref, fire_at, payload, done) as the job queue if no library is used.
+ app/ops: feedback (id, user_id, category, message, created_at), dev_notifications (id, chat_id, actor_id, kind, payload JSONB, created_at) and dev_notification_deliveries (notification_id, dev_id, status, error, sent_at), ai_memory (chat_id, role, content, created_at; bounded to 10 rows per chat, TTL 7 days), processed_updates (update_id PK, received_at; pruned after 48 h), app_flags (key, value) for maintenance and feedback_enabled, personality_load_log (checksum, size, loaded_at, ok, error).
+12.3 Temporary vs permanent
+ Permanent: users, chats, settings, lock_rules, approvals, force_sub_config, filters, warnings, wallets, ledger, xp, family_relations, stats, game_results, devs, audit_log (pruned by policy), achievements.
+ Temporary (with TTL and cleanup jobs): whispers (24 h, deleted on read), family_proposals (24 h), lobbies (24 h), finished room events/snapshots (keep 7 days, results kept permanently), ai_memory (7 days), processed_updates (48 h), force-sub cache, flood counters (memory), mutes (until expiry, then removed), kill/protect timers (until expiry), dev_notification_deliveries (90 days).
+12.4 Integrity rules: ledger writes and balance changes in one transaction; idempotency keys for rewards (match_id + user_id); optimistic concurrency (`version`) on rooms; advisory locks only for short critical sections; no table scans on hot paths (add indexes for chat_id lookups, expiry times, leaderboards).
+12.5 Backups and recovery: use Supabase daily backups (and PITR if the plan allows); additionally provide `pnpm run db:export` (logical dump of permanent tables) and a documented, tested restore procedure in RUNBOOK.md; migrations must be re-runnable on an empty database to a working state (tested in CI with a throwaway Postgres container).
+12.6 Privacy and retention: store only what features need; never store message contents except short AI memory, whispers (until read/TTL) and filter payloads; log no message text; allow a Dev-run "delete my data" tool for a user ID (documented); publish retention in the website privacy page.
+12.7 Optional one-time import tool (only if the owner supplies an export of the old data; Section 20 decision D5): map legacy entries (user_coins, owners, promoted_admins, approved (to per-category approvals = NOT migrated by default; ask), filters, family_relations, warnings, settings keys such as lock_*, welcome_*, goodbye_*, rules_text, warn_*, antiflood_*) into the new schema with dry-run mode and a report. Do not migrate legacy match blobs.
+12.8 Seed data you must author in English: truth/dare lists (>= 200 each, age-appropriate), word list (Section 7.8), achievements, bot names.
+ ACCEPTANCE: migrations apply on an empty DB in CI; schema tests assert constraints (negative balance rejected, approval category CHECK, single-slot family constraints); restore drill documented with evidence; explain plans for the 10 hottest queries show index use.
